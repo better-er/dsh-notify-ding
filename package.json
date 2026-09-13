@@ -1,0 +1,65 @@
+{
+  "name": "dsh-notify-ding",
+  "version": "0.1.0",
+  "description": "在 DSH 需要人工回答或一轮对话跑完时，弹出系统通知并让宿主播放 Windows 内置提示音。标准可安装的 dsh 客户端插件。",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "notification",
+    "sound",
+    "notify"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/better-er/dsh-notify-ding.git"
+  },
+  "author": "betterer",
+  "packageManager": "pnpm@9.15.9",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=26.3.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-session"
+      ]
+    }
+  },
+  "scripts": {
+    "prepare": "tsdown",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@types/node": "^22.20.1",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.3"
+  }
+}
