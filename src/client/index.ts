@@ -305,10 +305,19 @@ function titleOf(summary: SessionSummaryFace | undefined, fallbackId: string): s
  * 运行态从假升到真说明已回到该会话开始新一轮，会话被选中，
  * 以及会话从列表消失，都算一次操作。
  *
+ * 选中变化先于响铃处理，否则同一帧里既跑完又刚被选中的会话，通知会建立后
+ * 立刻被关掉。current 短暂变空是 DSH 的 masked gap，选中会话暂时不在列表时
+ * 就会出现，不算一次操作，也不该把上一个有效选中抹掉。
+ *
  * @param state 当前会话列表快照。
  * @param baseline 是否首帧，首帧只建基线。
  */
 function scanSessions(state: SessionListStateFace, baseline: boolean): void {
+  // 用户选中了某个会话，也算对该会话的一次操作。
+  if (state.current !== undefined) {
+    if (!baseline && state.current !== lastCurrent) closeNotification(state.current)
+    lastCurrent = state.current
+  }
   const seen = new Set<string>()
   for (const id of Object.keys(state.byId)) {
     const summary = state.byId[id]
@@ -335,11 +344,6 @@ function scanSessions(state: SessionListStateFace, baseline: boolean): void {
       closeNotification(id)
       tracks.delete(id)
     }
-  }
-  // 用户选中了某个会话，也算对该会话的一次操作。
-  if (state.current !== lastCurrent) {
-    if (!baseline && state.current !== undefined) closeNotification(state.current)
-    lastCurrent = state.current
   }
 }
 
