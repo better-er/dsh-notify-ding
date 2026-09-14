@@ -7,7 +7,6 @@
     "dsh",
     "dsh-plugin",
     "notification",
-    "sound",
     "notify"
   ],
   "repository": {

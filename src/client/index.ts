@@ -18,8 +18,6 @@
  *
  * @module dsh-notify-ding/client
  */
-import type { Context } from '@deepseek-ai/cordis'
-
 /** 插件名，同时也是配置项 id。 */
 export const name = 'dsh-notify-ding'
 
