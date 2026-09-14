@@ -1,7 +1,7 @@
 {
   "name": "dsh-notify-ding",
-  "version": "0.1.1",
-  "description": "在 DSH 需要人工回答或一轮对话跑完时，弹出系统通知并让宿主播放 Windows 内置提示音。标准可安装的 dsh 客户端插件。",
+  "version": "0.1.2",
+  "description": "在 DSH 需要人工回答或一轮对话跑完时弹出系统通知。标准可安装的 dsh 客户端插件。",
   "keywords": [
     "deepseek-harness",
     "dsh",

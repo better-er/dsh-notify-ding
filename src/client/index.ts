@@ -1,16 +1,15 @@
 /**
  * dsh-notify-ding 的浏览器半身。
  *
- * 只做两件事：判断「该响了」，然后同时敲两条路——弹浏览器系统通知，以及
- * 让宿主播放 Windows 内置提示音。声音之所以要委托宿主，是因为浏览器沙箱
- * 读不到 C:\Windows\Media 下的 wav，宿主半身负责那一步。
+ * 只做两件事：判断「该响了」，然后弹一条浏览器系统通知。
+ * 提示音由系统通知自带，插件不另外发声，全屏专注时通知音会被系统一并静音。
  *
  * 触发条件有两个：
  * 1. 某个会话出现了新的待人工回答交互，question / plan-review / approval 都算；
  * 2. 某个会话从「执行中」落到「空闲」，即一轮对话跑完。
  *
  * 按用户选择，两种都响，且不判断页面是否聚焦、不区分是否为当前会话。
- * 声源重复靠两道闸门挡：同一待回答请求的 key 只响一次，以及跨标签页共享
+ * 重复靠两道闸门挡：同一待回答请求的 key 只响一次，以及跨标签页共享
  * 的最小间隔，避免多开标签页时同一件事响好几轮。
  *
  * 通知不设自动关闭时间，会一直挂在系统通知里，直到对应会话发生操作：
@@ -26,9 +25,6 @@ export const name = 'dsh-notify-ding'
 
 /** 本插件需要的客户端服务。 */
 export const inject = ['uiSession', 'sessions']
-
-/** 宿主播音路由，与宿主半身注册的路径一致。 */
-const DING_PATH = '/dsh-notify-ding/ding'
 
 /** 两次响铃之间的最小间隔，窗口内的合并成一次。 */
 const MIN_INTERVAL_MS = 800
@@ -129,18 +125,6 @@ function writeSharedLastDing(stamp: number): void {
   } catch (error) {
     console.warn('[dsh-notify-ding] 写入共享响铃时刻失败：' + String(error))
   }
-}
-
-/**
- * 请求宿主播放提示音。
- *
- * 声音本身与系统通知互相独立：通知弹不出来时声音照样响，反之亦然。
- * 这里不阻塞调用方，播音失败只记一条警告。
- */
-function requestHostDing(): void {
-  void fetch(DING_PATH, { method: 'POST', credentials: 'same-origin' }).catch((error: unknown) => {
-    console.warn('[dsh-notify-ding] 请求宿主播音失败：' + String(error))
-  })
 }
 
 /** 关掉某会话的通知；没有或已关就当无操作。 */
@@ -247,17 +231,6 @@ function armPermissionGesture(): void {
 }
 
 /**
- * 发一次「叮咚」：弹系统通知并请宿主播音。
- * @param sessionId 这条通知所属的会话。
- * @param title 通知标题。
- * @param body 通知正文。
- */
-function emit(sessionId: string, title: string, body: string): void {
-  showSystemNotification(sessionId, title, body)
-  requestHostDing()
-}
-
-/**
  * 发一次「叮咚」，并做节流。
  *
  * 节流时刻写进 localStorage，多标签页共享，避免多开时同一件事响好几轮。
@@ -274,7 +247,7 @@ function ding(sessionId: string, title: string, body: string): void {
   if (since < 0 || since >= MIN_INTERVAL_MS) {
     lastDingAt = now
     writeSharedLastDing(now)
-    emit(sessionId, title, body)
+    showSystemNotification(sessionId, title, body)
     return
   }
   deferred = { sessionId, title, body }
@@ -287,7 +260,7 @@ function ding(sessionId: string, title: string, body: string): void {
     const stamp = Date.now()
     lastDingAt = stamp
     writeSharedLastDing(stamp)
-    emit(pending.sessionId, pending.title, pending.body)
+    showSystemNotification(pending.sessionId, pending.title, pending.body)
   }, MIN_INTERVAL_MS - since)
 }
 
