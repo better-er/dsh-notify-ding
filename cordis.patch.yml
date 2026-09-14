@@ -1,6 +1,6 @@
 # dsh-notify-ding bundle patch：把通知插件插进 profile 的 layer stack。
 # 当本 bundle 出现在 profile 的 dsh.profile.bundles 列表里时应用。
-# 主机端半身负责宿主的提示音路由与可选的窗口提示音。
+# 宿主半身没有运行时行为，只让包能被 Loader 加载。
 # 浏览器半身由包的 dsh.client 声明与 exports["./client"] 自动发现。
 
 - insert:

@@ -4,7 +4,7 @@
 
 ## 环境
 
-- Node.js 22 或更新版本
+- Node.js 26.3.1
 - pnpm 9
 
 ```powershell
@@ -15,7 +15,7 @@ pnpm install
 
 ```powershell
 pnpm run typecheck   # 严格类型检查，不产出文件
-pnpm run build       # tsdown 构建，产出 lib/index.js 与 lib/client.js
+pnpm run build       # tsdown 构建，产出 lib/index.js、lib/client.js 与 lib/index.d.ts
 ```
 
 `lib/` 是构建产物，不入库，也不要手改。改行为请改 `src/`。
@@ -24,12 +24,12 @@ pnpm run build       # tsdown 构建，产出 lib/index.js 与 lib/client.js
 
 | 路径 | 作用 |
 | --- | --- |
-| `src/index.ts` | 宿主半身，注册播音路由 |
+| `src/index.ts` | 宿主入口，无运行时行为，只用于让包被 Loader 加载 |
 | `src/client/index.ts` | 浏览器半身，边沿检测与通知 |
 | `cordis.patch.yml` | bundle 挂载补丁 |
 | `docs/design.md` | 设计说明 |
 
-宿主半身只负责发声，浏览器半身只负责判断该不该响。加功能时请守住这条边界：浏览器侧不该出现任何文件路径，宿主侧不该出现任何触发判断。
+插件只有浏览器半身：它盯住会话状态，判断该不该响，然后弹出系统通知，提示音由 Windows 通知系统自带。宿主入口文件没有运行时行为，只为让客户端模块系统能扫到 `dsh.client` 声明，加功能时都在浏览器侧完成。
 
 ## 约定
 
@@ -43,10 +43,10 @@ pnpm run build       # tsdown 构建，产出 lib/index.js 与 lib/client.js
 
 仓库暂无自动化单测，改动后请手工验证：
 
-1. 宿主路由：重启 DSH web 后，对 `/dsh-notify-ding/ding` 发 POST，应听到提示音。
-2. 提问触发：在会话里触发一次提问，应弹通知并响。
-3. 完成触发：跑完一轮对话，应弹通知并响。
-4. 去重：连续触发，间隔小于 800 毫秒的应合并，同一待回答请求只响一次。
+1. 提问触发：重启 DSH web 后，在会话里触发一次提问，应弹出系统通知，提示音由 Windows 通知系统自带。
+2. 完成触发：跑完一轮对话，也应弹出系统通知。
+3. 去重：连续触发，间隔小于 800 毫秒的应合并，同一待回答请求只弹一次。
+4. 关闭：会话被选中、开始新一轮、待回答被解决或从列表移除时，对应通知应被关掉。
 
 ## 发布
 
