@@ -12,7 +12,7 @@
 
 | 信号 | 来源 | 触发条件 |
 | --- | --- | --- |
-| 待人工回答 | `ctx.uiSession.pendingInteractions` | 某会话出现新 key 的交互，question、plan-review、approval 都算 |
+| 等待回复 | `ctx.uiSession.sessionStatus` | 某会话出现新 key 的交互，question、plan-review、approval 都算 |
 | 一轮跑完 | `ctx.sessions.list` 的 `byId[].running` | 某会话运行态从真落到假 |
 
 两者都是可订阅的只读快照，插件不修改任何状态，只观察。

@@ -2,8 +2,7 @@
  * dsh-notify-ding 的宿主入口。
  *
  * 提示音交给系统通知自带，插件不再自行发声，因此本入口没有运行时行为。
- * 之所以还留一个入口文件，是因为客户端模块系统按 Loader entry 扫描
- * dsh.client 声明：entry 指向的宿主模块必须存在，浏览器半身才会被加载。
+ * 之所以还留一个入口文件，是因为客户端模块系统按 Loader entry 扫描 dsh.client 声明：entry 指向的宿主模块必须存在，浏览器半身才会被加载。
  *
  * @module dsh-notify-ding
  */
