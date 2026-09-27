@@ -5,16 +5,13 @@
  * 提示音由系统通知自带，插件不另外发声，全屏专注时通知音会被系统一并静音。
  *
  * 触发条件有两个：
- * 1. 某个会话出现了新的待人工回答交互，question / plan-review / approval 都算；
+ * 1. 某个会话出现了新的等待回复交互，question / plan-review / approval 都算；
  * 2. 某个会话从「执行中」落到「空闲」，即一轮对话跑完。
  *
  * 按用户选择，两种都响，且不判断页面是否聚焦、不区分是否为当前会话。
- * 重复靠两道闸门挡：同一待回答请求的 key 只响一次，以及跨标签页共享
- * 的最小间隔，避免多开标签页时同一件事响好几轮。
+ * 重复靠两道闸门挡：同一待回答请求的 key 只响一次，以及跨标签页共享的最小间隔，避免多开标签页时同一件事响好几轮。
  *
- * 通知不设自动关闭时间，会一直挂在系统通知里，直到对应会话发生操作：
- * 会话被选中、该会话开始新一轮、待回答被解决，或会话从列表移除。每个会话
- * 最多只保留最新一条，新通知会顶掉旧的；点击通知会聚焦窗口并切到该会话。
+ * 通知不设自动关闭时间，会一直挂在系统通知里，直到对应会话发生操作：会话被选中、该会话开始新一轮、待回答被解决，或会话从列表移除。每个会话最多只保留最新一条，新通知会顶掉旧的；点击通知会聚焦窗口并切到该会话。
  *
  * @module dsh-notify-ding/client
  */
@@ -42,7 +39,7 @@ let listSourceRef: SnapshotSourceFace<SessionListStateFace> | undefined
 /** 上一帧被选中的会话，用来识别「用户选中了某个会话」这个操作信号。 */
 let lastCurrent: string | undefined
 
-/** 一个待人工回答的交互，只关心其稳定 key。 */
+/** 一个等待回复的交互，只关心其稳定 key。 */
 interface PendingInteractionFace {
   readonly key: string
 }
@@ -66,8 +63,13 @@ interface SnapshotSourceFace<T> {
   subscribe(listener: () => void): () => void
 }
 
-/** 待回答交互快照源，按会话 id 索引。 */
-type PendingSourceFace = SnapshotSourceFace<ReadonlyMap<string, PendingInteractionFace>>
+/** uiSession 状态快照里本插件用得到的一行。 */
+interface SessionStatusFace {
+  readonly pendingInteraction?: PendingInteractionFace
+}
+
+/** 会话状态快照源，按会话 id 索引。 */
+type SessionStatusSourceFace = SnapshotSourceFace<ReadonlyMap<string, SessionStatusFace>>
 
 /** 浏览器与服务两端都够用的一小片客户端上下文。 */
 interface NotifyClientContext {
@@ -75,7 +77,7 @@ interface NotifyClientContext {
     readonly list: SnapshotSourceFace<SessionListStateFace>
     open?(id: string): void
   }
-  readonly uiSession: { readonly pendingInteractions: PendingSourceFace }
+  readonly uiSession: { readonly sessionStatus: SessionStatusSourceFace }
   effect(callback: () => (() => void) | void): void
 }
 
@@ -100,8 +102,7 @@ let deferredTimer = 0
 /**
  * 读取跨标签页共享的上次响铃时刻。
  *
- * localStorage 可能因隐私模式或禁用存储而抛错，抛错时按 0 处理即可，
- * 最坏退化成只在单个标签页内节流。
+ * localStorage 可能因隐私模式或禁用存储而抛错，抛错时按 0 处理即可，最坏退化成只在单个标签页内节流。
  *
  * @returns 上次响铃的 Unix 毫秒时间戳。
  */
@@ -167,8 +168,7 @@ function openSessionInUi(sessionId: string): void {
  * 每个会话最多保留一条，新的会先关掉同会话的旧的。
  * 点击通知会聚焦窗口并切到该会话，同时关掉这条通知。
  *
- * 浏览器未授权时不强行索要权限，而是记下需要补授权，等到用户下一次
- * 与页面交互时再请求——权限请求必须由用户手势触发。
+ * 浏览器未授权时不强行索要权限，而是记下需要补授权，等到用户下一次与页面交互时再请求——权限请求必须由用户手势触发。
  *
  * @param sessionId 这条通知所属的会话。
  * @param title 通知标题。
@@ -232,8 +232,7 @@ function armPermissionGesture(): void {
  * 发一次「叮咚」，并做节流。
  *
  * 节流时刻写进 localStorage，多标签页共享，避免多开时同一件事响好几轮。
- * 被节流压下的请求不会直接丢弃，而是挂到窗口边界的定时器上补发，
- * 这样连续两次状态变化仍然各响一次，只是间隔被拉开，不会出现漏报。
+ * 被节流压下的请求不会直接丢弃，而是挂到窗口边界的定时器上补发，这样连续两次状态变化仍然各响一次，只是间隔被拉开，不会出现漏报。
  *
  * @param sessionId 这条通知所属的会话。
  * @param title 通知标题。
@@ -272,13 +271,9 @@ function titleOf(summary: SessionSummaryFace | undefined, fallbackId: string): s
  * 用一帧会话列表快照做边沿检测：新出现的待回答交互响一次，运行态从真落到假响一次。
  *
  * 首帧只建基线不响，否则每次刷新页面都会把既有状态补报一轮。
- * 同时识别「会话被操作」的信号，把对应会话还挂着的通知关掉：
- * 运行态从假升到真说明已回到该会话开始新一轮，会话被选中，
- * 以及会话从列表消失，都算一次操作。
+ * 同时识别「会话被操作」的信号，把对应会话还挂着的通知关掉：运行态从假升到真说明已回到该会话开始新一轮，会话被选中，以及会话从列表消失，都算一次操作。
  *
- * 选中变化先于响铃处理，否则同一帧里既跑完又刚被选中的会话，通知会建立后
- * 立刻被关掉。current 短暂变空是 DSH 的 masked gap，选中会话暂时不在列表时
- * 就会出现，不算一次操作，也不该把上一个有效选中抹掉。
+ * 选中变化先于响铃处理，否则同一帧里既跑完又刚被选中的会话，通知会建立后立刻被关掉。current 短暂变空是 DSH 的 masked gap，选中会话暂时不在列表时就会出现，不算一次操作，也不该把上一个有效选中抹掉。
  *
  * @param state 当前会话列表快照。
  * @param baseline 是否首帧，首帧只建基线。
@@ -365,6 +360,15 @@ function scanPending(
   }
 }
 
+/** 从会话状态快照里投影出待回答交互，按会话 id 索引。 */
+function readPending(statusSource: SessionStatusSourceFace): ReadonlyMap<string, PendingInteractionFace> {
+  const projected = new Map<string, PendingInteractionFace>()
+  for (const [id, row] of statusSource.getSnapshot()) {
+    if (row.pendingInteraction) projected.set(id, row.pendingInteraction)
+  }
+  return projected
+}
+
 /**
  * 同时盯住会话列表与待回答交互两个快照源。
  *
@@ -374,8 +378,7 @@ export function apply(ctx: NotifyClientContext): void {
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
     armPermissionGesture()
   }
-
-  const pendingSource = ctx.uiSession.pendingInteractions
+  const statusSource = ctx.uiSession.sessionStatus
   const listSource = ctx.sessions.list
   const open = ctx.sessions.open
   // 点击通知时用来切会话；入口缺失时点击只关通知。
@@ -398,14 +401,14 @@ export function apply(ctx: NotifyClientContext): void {
     initialized = true
     scanSessions(state, baseline)
     try {
-      scanPending(pendingSource.getSnapshot(), state, baseline)
+      scanPending(readPending(statusSource), state, baseline)
     } catch (error) {
       console.warn('[dsh-notify-ding] 读取待回答交互失败：' + String(error))
     }
   }
 
   const unsubscribeList = listSource.subscribe(scan)
-  const unsubscribePending = pendingSource.subscribe(scan)
+  const unsubscribePending = statusSource.subscribe(scan)
   scan()
 
   ctx.effect(() => () => {
