@@ -13,12 +13,18 @@
  *
  * 通知不设自动关闭时间，会一直挂在系统通知里，直到对应会话发生操作：会话被选中、该会话开始新一轮、待回答被解决，或会话从列表移除。每个会话最多只保留最新一条，新通知会顶掉旧的；点击通知会聚焦窗口并切到该会话。
  *
+ * 一轮结束的通知在会话还有后台任务在跑时，把「已空闲」换成任务数量摘要：任务常常活过一轮，只说已空闲会让人以为全都干完了。名册来自 ctx.jobs，按会话引用计数订阅；组合里没有 job-controller 时照旧报「已空闲」。
+ *
  * @module dsh-notify-ding/client
  */
 /** 插件名，同时也是配置项 id。 */
 export const name = 'dsh-notify-ding'
 
-/** 本插件需要的客户端服务。 */
+/**
+ * 本插件需要的客户端服务。
+ *
+ * ctx.jobs 不在其中：组合里可能没有 job-controller，缺了它只是通知里少一行后台任务，不该让整个插件不加载，所以按可选服务读取。
+ */
 export const inject = ['uiSession', 'sessions']
 
 /** 两次响铃之间的最小间隔，窗口内的合并成一次。 */
@@ -26,6 +32,12 @@ const MIN_INTERVAL_MS = 800
 
 /** 跨标签页共享「上次响铃时刻」的 localStorage 键。 */
 const LAST_DING_KEY = 'dsh-notify-ding.lastDingAt'
+
+/** 通知正文里任务详情最多列几个，超出只报总数。 */
+const JOB_DETAIL_LIMIT = 3
+
+/** 任务详情里单个任务名的最大长度，超出取头截断。 */
+const JOB_DETAIL_LABEL_LIMIT = 24
 
 /** 当前挂在系统通知里、按会话索引的通知，新通知会顶掉同会话的旧通知。 */
 const liveNotifications = new Map<string, Notification>()
@@ -63,6 +75,25 @@ interface SnapshotSourceFace<T> {
   subscribe(listener: () => void): () => void
 }
 
+/** 后台任务名册里一行本插件用得到的字段。 */
+interface JobRowFace {
+  readonly id: string
+  readonly label: string
+  readonly status: string
+  readonly owner?: string
+}
+
+/** 后台任务名册快照里本插件用得到的字段。 */
+interface JobsStateFace {
+  readonly rows: Readonly<Record<string, readonly JobRowFace[]>>
+}
+
+/** 客户端后台任务服务 ctx.jobs 里本插件用得到的部分。 */
+interface JobsFace {
+  readonly state: { getSnapshot(): JobsStateFace }
+  watchRows(sessionId: string): () => void
+}
+
 /** uiSession 状态快照里本插件用得到的一行。 */
 interface SessionStatusFace {
   readonly pendingInteraction?: PendingInteractionFace
@@ -79,6 +110,8 @@ interface NotifyClientContext {
   }
   readonly uiSession: { readonly sessionStatus: SessionStatusSourceFace }
   effect(callback: () => (() => void) | void): void
+  /** 按名字取可选客户端服务；组合里没有的服务返回 undefined。 */
+  get?(name: string): unknown
 }
 
 /** 每个会话在上一帧里的运行态与已见过的待回答 key。 */
@@ -89,6 +122,12 @@ interface SessionTrack {
 
 /** 记录各会话上一帧状态，用来做边沿检测。 */
 const tracks = new Map<string, SessionTrack>()
+
+/** 已经持有引用的后台任务名册，键为会话 id，值为释放函数。 */
+const watchedRosters = new Map<string, () => void>()
+
+/** 客户端后台任务服务，apply 时解析；组合里没有 job-controller 时保持 undefined。 */
+let jobsFace: JobsFace | undefined
 
 /** 本页面上次响铃的时间戳，兜住同一帧内的重复触发。 */
 let lastDingAt = 0
@@ -233,6 +272,7 @@ function armPermissionGesture(): void {
  *
  * 节流时刻写进 localStorage，多标签页共享，避免多开时同一件事响好几轮。
  * 被节流压下的请求不会直接丢弃，而是挂到窗口边界的定时器上补发，这样连续两次状态变化仍然各响一次，只是间隔被拉开，不会出现漏报。
+ * 正文由调用方在触发那一刻算好，补发的通知因此带的是触发时刻的任务名册。
  *
  * @param sessionId 这条通知所属的会话。
  * @param title 通知标题。
@@ -267,6 +307,91 @@ function titleOf(summary: SessionSummaryFace | undefined, fallbackId: string): s
   return raw && raw.length > 0 ? raw : fallbackId
 }
 
+/** 从客户端上下文取后台任务服务；组合里没有 job-controller 时返回 undefined。 */
+function readJobsFace(ctx: NotifyClientContext): JobsFace | undefined {
+  try {
+    return ctx.get?.('jobs') as JobsFace | undefined
+  } catch (error) {
+    console.warn('[dsh-notify-ding] 读取后台任务服务失败：' + String(error))
+    return undefined
+  }
+}
+
+/** 开始持有某会话的后台任务名册引用；没有该服务或已经持有则什么都不做。 */
+function watchRoster(sessionId: string): void {
+  if (jobsFace === undefined || watchedRosters.has(sessionId)) return
+  try {
+    watchedRosters.set(sessionId, jobsFace.watchRows(sessionId))
+  } catch (error) {
+    console.warn('[dsh-notify-ding] 订阅后台任务名册失败：' + String(error))
+  }
+}
+
+/** 释放某会话的后台任务名册引用，会话从列表移除或插件卸载时调用。 */
+function unwatchRoster(sessionId: string): void {
+  const release = watchedRosters.get(sessionId)
+  if (release === undefined) return
+  watchedRosters.delete(sessionId)
+  try {
+    release()
+  } catch (error) {
+    console.warn('[dsh-notify-ding] 释放后台任务名册失败：' + String(error))
+  }
+}
+
+/** 释放全部后台任务名册引用，插件卸载时收尾。 */
+function unwatchAllRosters(): void {
+  for (const sessionId of Array.from(watchedRosters.keys())) unwatchRoster(sessionId)
+}
+
+/**
+ * 挑出某会话仍在跑的后台任务。
+ *
+ * 只取归属该会话的任务：无主任务会出现在每个会话的名册里，列进去会在每条通知里重复。
+ *
+ * @param sessionId 通知所属会话。
+ * @returns 名册里归属该会话且仍在运行的行；没有则为空数组。
+ */
+function runningJobs(sessionId: string): readonly JobRowFace[] {
+  const rows = jobsFace?.state.getSnapshot().rows[sessionId]
+  if (rows === undefined || rows.length === 0) return []
+  return rows.filter((row) => {
+    if (row.status !== 'running' && row.status !== 'stopping') return false
+    return row.owner !== undefined && String(row.owner) === sessionId
+  })
+}
+
+/** 单个任务在详情行里的短名字，标签为空时退回 id，过长时取头截断。 */
+function describeJob(row: JobRowFace): string {
+  const label = row.label.trim()
+  if (label.length === 0) return row.id
+  const head = label.length > JOB_DETAIL_LABEL_LIMIT ? label.slice(0, JOB_DETAIL_LABEL_LIMIT) + '…' : label
+  return row.id + ' ' + head
+}
+
+/**
+ * 一轮结束时的通知正文。
+ *
+ * 还有后台任务时，「已空闲」的位置报数量，次一级的位置列出任务详情的前几个；任务常常活过一轮，只说已空闲会让人以为全都干完了。
+ *
+ * @param sessionId 通知所属会话。
+ * @param title 会话标题。
+ * @returns 通知正文，需要时带一个换行分成两行。
+ */
+function idleBody(sessionId: string, title: string): string {
+  let running: readonly JobRowFace[]
+  try {
+    running = runningJobs(sessionId)
+  } catch (error) {
+    console.warn('[dsh-notify-ding] 读取后台任务名册失败：' + String(error))
+    return title + ' 已空闲'
+  }
+  if (running.length === 0) return title + ' 已空闲'
+  const details = running.slice(0, JOB_DETAIL_LIMIT).map(describeJob).join('、')
+  const rest = running.length > JOB_DETAIL_LIMIT ? ' 等 ' + running.length + ' 个' : ''
+  return title + ' 后台还有 ' + running.length + ' 个任务\n' + details + rest
+}
+
 /**
  * 用一帧会话列表快照做边沿检测：新出现的待回答交互响一次，运行态从真落到假响一次。
  *
@@ -289,6 +414,7 @@ function scanSessions(state: SessionListStateFace, baseline: boolean): void {
     const summary = state.byId[id]
     if (!summary) continue
     seen.add(id)
+    watchRoster(id)
     let track = tracks.get(id)
     if (!track) {
       track = { running: summary.running, pendingKeys: new Set<string>() }
@@ -297,7 +423,7 @@ function scanSessions(state: SessionListStateFace, baseline: boolean): void {
     if (!baseline) {
       // 一轮对话跑完：运行态下降沿，响一次。
       if (track.running && !summary.running) {
-        ding(id, 'DSH 完成了一轮', titleOf(summary, id) + ' 已空闲')
+        ding(id, 'DSH 完成了一轮', idleBody(id, titleOf(summary, id)))
       }
       // 运行态上升沿：该会话开始新一轮，关掉它还没撤掉的通知。
       if (!track.running && summary.running) closeNotification(id)
@@ -308,6 +434,7 @@ function scanSessions(state: SessionListStateFace, baseline: boolean): void {
   for (const id of Array.from(tracks.keys())) {
     if (!seen.has(id)) {
       closeNotification(id)
+      unwatchRoster(id)
       tracks.delete(id)
     }
   }
@@ -384,6 +511,7 @@ export function apply(ctx: NotifyClientContext): void {
   // 点击通知时用来切会话；入口缺失时点击只关通知。
   sessionOpener = typeof open === 'function' ? open.bind(ctx.sessions) : undefined
   listSourceRef = listSource
+  jobsFace = readJobsFace(ctx)
 
   /** 是否已经用首帧快照建立过基线；首帧只记录不发声。 */
   let initialized = false
@@ -420,8 +548,10 @@ export function apply(ctx: NotifyClientContext): void {
     }
     deferred = null
     closeAllNotifications()
+    unwatchAllRosters()
     sessionOpener = undefined
     listSourceRef = undefined
+    jobsFace = undefined
     lastCurrent = undefined
     tracks.clear()
   })

@@ -1,4 +1,4 @@
-# dsh·通知叮咚插件
+# DSH·通知叮咚
 
 在 DSH 等待你回复或一轮对话跑完时，弹出系统通知。
 
@@ -18,6 +18,7 @@
 - 通知不设自动关闭时间，会一直留在系统通知里，直到对应会话发生操作：会话被选中、该会话开始新一轮、待回答被解决，或会话从列表移除。
 - 每个会话最多保留一条通知，新通知会顶掉同会话的旧通知；点击通知会聚焦窗口并切到该会话。
 - 同一待回答请求只响一次，两次响铃之间至少有 800 毫秒间隔，且该间隔跨标签页共享，多开标签页不会重复响。
+- 一轮跑完时若该会话还有后台任务在跑，通知正文把「已空闲」换成「后台还有 N 个任务」，第二行列出任务详情的前几个，不会让人以为全都干完了。
 
 ## 使用
 
@@ -65,21 +66,24 @@ dsh plugin --profile web remove dsh-notify-ding
 
 浏览器半身订阅 `ctx.sessions.list` 与 `ctx.uiSession.sessionStatus` 两个只读快照，用边沿检测判断该不该响：运行态从真落到假算一轮跑完，出现新 key 的待回答交互算需要人工介入。首帧只建基线不发声，同一待回答请求只响一次，两次响铃之间留至少 800 毫秒并把该时刻写入 localStorage 跨标签页共享。
 
-判定通过时它弹出一条浏览器系统通知。通知按会话记录且不设自动关闭，同一会话只留最新一条；会话被选中、开始新一轮、待回答被解决或从列表移除时会关掉对应通知，点击通知则聚焦窗口、切换过去并关掉该条。完整设计见 [设计说明](docs/design.md)。
+判定通过时它弹出一条浏览器系统通知。通知按会话记录且不设自动关闭，同一会话只留最新一条；会话被选中、开始新一轮、待回答被解决或从列表移除时会关掉对应通知，点击通知则聚焦窗口、切换过去并关掉该条。
+
+一轮结束那条通知的正文来自可选的 `ctx.jobs`：按会话引用计数订阅 `job.list` 名册，在触发那一刻取该会话自己仍在运行的任务，有就把「已空闲」换成「后台还有 N 个任务」，第二行列出前三个任务的 id 与标签，标签取头截断。组合里没有 job-controller 时照旧报「已空闲」。完整设计见 [设计说明](docs/design.md)。
 
 ## 要求与开发
 
 - 是标准形态的 dsh client 插件，声明 `dsh.client`，导出 `./client`。
 - 同时声明了 `dsh.bundle`，因此也是一个自挂载的 bundle 层插件：用 `dsh plugin --profile <name> add` 从 GitHub 安装后会被自动识别为 profile layer 并挂载，无需手工写组合 entry。
 - 浏览器半身依赖 `uiSession` 与 `sessions`；宿主入口没有运行时行为，只为让包能被 Loader 加载。
+- 后台任务名册来自可选的 `ctx.jobs`，`dsh.client.inject` 里声明了 `@deepseek-ai/dsh-api-job-controller` 以保证加载顺序；组合里没有它时插件照常工作，一轮跑完的通知照旧报「已空闲」。
 - 构建型插件：`src/` 是 TypeScript 源码，`lib/` 是构建产物且不入库，安装或发布前由 `prepare` 构建。
 
 ## 开发
 
 ```powershell
 pnpm install
-pnpm run typecheck   # tsc --noEmit 严格类型检查
-pnpm run build       # tsdown，产出 lib/index.js 与 lib/client.js
+pnpm typecheck   # tsc --noEmit 严格类型检查
+pnpm build       # tsdown，产出 lib/index.js 与 lib/client.js
 ```
 
 - `src/index.ts`：宿主入口，无运行时行为，只用于让包被 Loader 加载。

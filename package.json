@@ -1,6 +1,6 @@
 {
   "name": "dsh-notify-ding",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "「DSH·通知叮咚」：在 DSH 等待回复或一轮对话跑完时弹出系统通知。标准可安装的 dsh 客户端插件。",
   "keywords": [
     "deepseek-harness",
@@ -46,6 +46,7 @@
     "client": {
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-api-job-controller",
         "@deepseek-ai/dsh-client-ui-session"
       ]
     }
@@ -57,6 +58,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": "^0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-job-controller": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-session": "^0.2.0-rc.2"
   },
   "devDependencies": {
