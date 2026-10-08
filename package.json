@@ -1,6 +1,6 @@
 {
   "name": "dsh-notify-ding",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "「DSH·通知叮咚」：在 DSH 等待回复或一轮对话跑完时弹出系统通知。标准可安装的 dsh 客户端插件。",
   "keywords": [
     "deepseek-harness",
