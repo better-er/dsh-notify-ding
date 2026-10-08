@@ -6,7 +6,7 @@
  *
  * 触发条件有两个：
  * 1. 某个会话出现了新的等待回复交互，question / plan-review / approval 都算；
- * 2. 某个会话从「执行中」落到「空闲」，即一轮对话跑完。
+ * 2. 某个会话从「执行中」落到「空闲」，即一轮对话跑完；会话的目标还在自动续跑时照样响，只是改报「目标进行中」，横幅自动消失，免得每轮堆一条常驻通知。
  *
  * 按用户选择，两种都响，且不判断页面是否聚焦、不区分是否为当前会话。
  * 重复靠两道闸门挡：同一待回答请求的 key 只响一次，以及跨标签页共享的最小间隔，避免多开标签页时同一件事响好几轮。
@@ -39,6 +39,12 @@ const JOB_DETAIL_LIMIT = 3
 /** 任务详情里单个任务名的最大长度，超出取头截断。 */
 const JOB_DETAIL_LABEL_LIMIT = 24
 
+/** goal 处于这个持久阶段时 DSH 会自动续跑下一轮，一轮结束不等于轮到用户。 */
+const GOAL_ACTIVE_PHASE = 'active'
+
+/** 目标自动续跑时那轮空闲的通知标题，内容只在通知中心留一小会儿。 */
+const GOAL_PROGRESS_TITLE = 'DSH 目标进行中'
+
 /** 当前挂在系统通知里、按会话索引的通知，新通知会顶掉同会话的旧通知。 */
 const liveNotifications = new Map<string, Notification>()
 
@@ -61,6 +67,13 @@ interface SessionSummaryFace {
   readonly id: string
   readonly displayTitle?: string
   readonly running: boolean
+  /** 宿主算好的投影值；本插件只关心 goal。 */
+  readonly projectionValues?: {
+    readonly goal?: {
+      readonly goal?: { readonly phase?: string }
+      readonly roundsStarted?: number
+    } | null
+  }
 }
 
 /** 会话列表快照里本插件用得到的字段。 */
@@ -133,7 +146,7 @@ let jobsFace: JobsFace | undefined
 let lastDingAt = 0
 
 /** 因节流被暂时压下的最新一条待响请求，窗口过后补发。 */
-let deferred: { sessionId: string; title: string; body: string } | null = null
+let deferred: { sessionId: string; title: string; body: string; transient: boolean } | null = null
 
 /** 补发定时器的句柄，0 表示当前没有挂起的补发。 */
 let deferredTimer = 0
@@ -212,14 +225,15 @@ function openSessionInUi(sessionId: string): void {
  * @param sessionId 这条通知所属的会话。
  * @param title 通知标题。
  * @param body 通知正文。
+ * @param transient 是否临时提示；true 时不要求常驻，横幅按系统默认时长自动消失。
  */
-function showSystemNotification(sessionId: string, title: string, body: string): void {
+function showSystemNotification(sessionId: string, title: string, body: string, transient: boolean): void {
   if (typeof Notification === 'undefined') return
 
   const present = (): void => {
     closeNotification(sessionId)
     try {
-      const notification = new Notification(title, { body, requireInteraction: true })
+      const notification = new Notification(title, { body, requireInteraction: !transient })
       notification.onclick = () => {
         openSessionInUi(sessionId)
         closeNotification(sessionId)
@@ -277,17 +291,18 @@ function armPermissionGesture(): void {
  * @param sessionId 这条通知所属的会话。
  * @param title 通知标题。
  * @param body 通知正文。
+ * @param transient 是否临时提示；目标续跑那种报个信就够的用 true，横幅自动消失。
  */
-function ding(sessionId: string, title: string, body: string): void {
+function ding(sessionId: string, title: string, body: string, transient = false): void {
   const now = Date.now()
   const since = now - Math.max(lastDingAt, readSharedLastDing())
   if (since < 0 || since >= MIN_INTERVAL_MS) {
     lastDingAt = now
     writeSharedLastDing(now)
-    showSystemNotification(sessionId, title, body)
+    showSystemNotification(sessionId, title, body, transient)
     return
   }
-  deferred = { sessionId, title, body }
+  deferred = { sessionId, title, body, transient }
   if (deferredTimer !== 0) return
   deferredTimer = window.setTimeout(() => {
     deferredTimer = 0
@@ -297,7 +312,7 @@ function ding(sessionId: string, title: string, body: string): void {
     const stamp = Date.now()
     lastDingAt = stamp
     writeSharedLastDing(stamp)
-    showSystemNotification(pending.sessionId, pending.title, pending.body)
+    showSystemNotification(pending.sessionId, pending.title, pending.body, pending.transient)
   }, MIN_INTERVAL_MS - since)
 }
 
@@ -393,6 +408,34 @@ function idleBody(sessionId: string, title: string): string {
 }
 
 /**
+ * 该会话是否有一个还会自动续跑的目标。
+ *
+ * 目标处于 active 时 DSH 会自己接着跑下一轮，轮与轮之间都会短暂落到空闲。
+ * 这种空闲不报「完成了一轮」，改报目标进行中的临时提示，免得每轮堆一条常驻通知。
+ *
+ * @param summary 当前会话摘要。
+ * @returns 目标处于 active 时为真。
+ */
+function hasActiveGoal(summary: SessionSummaryFace): boolean {
+  return summary.projectionValues?.goal?.goal?.phase === GOAL_ACTIVE_PHASE
+}
+
+/**
+ * 目标自动续跑时那轮空闲的通知正文。
+ *
+ * 这里报「完成了一轮」会让人以为可以回来看了，所以改报目标还在进行，并带上已经跑完的轮数。
+ *
+ * @param summary 当前会话摘要。
+ * @param title 会话标题。
+ * @returns 通知正文。
+ */
+function goalProgressBody(summary: SessionSummaryFace, title: string): string {
+  const rounds = summary.projectionValues?.goal?.roundsStarted
+  const progress = typeof rounds === 'number' && rounds > 0 ? '已跑 ' + rounds + ' 轮' : '正在自动续跑'
+  return title + ' 目标进行中，' + progress
+}
+
+/**
  * 用一帧会话列表快照做边沿检测：新出现的待回答交互响一次，运行态从真落到假响一次。
  *
  * 首帧只建基线不响，否则每次刷新页面都会把既有状态补报一轮。
@@ -421,9 +464,11 @@ function scanSessions(state: SessionListStateFace, baseline: boolean): void {
       tracks.set(id, track)
     }
     if (!baseline) {
-      // 一轮对话跑完：运行态下降沿，响一次。
+      // 一轮对话跑完：运行态下降沿响一次。目标还会自动续跑时改报「目标进行中」的临时提示，横幅自动消失，免得每轮堆一条常驻通知。
       if (track.running && !summary.running) {
-        ding(id, 'DSH 完成了一轮', idleBody(id, titleOf(summary, id)))
+        const title = titleOf(summary, id)
+        if (hasActiveGoal(summary)) ding(id, GOAL_PROGRESS_TITLE, goalProgressBody(summary, title), true)
+        else ding(id, 'DSH 完成了一轮', idleBody(id, title))
       }
       // 运行态上升沿：该会话开始新一轮，关掉它还没撤掉的通知。
       if (!track.running && summary.running) closeNotification(id)
